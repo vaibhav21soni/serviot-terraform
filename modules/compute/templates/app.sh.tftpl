@@ -1,0 +1,23 @@
+#!/bin/bash
+# App server bootstrap (Ubuntu 22.04): Docker (both apps run as containers) +
+# host Nginx as the single reverse proxy + certbot for Let's Encrypt.
+# SSH user = ubuntu. jenkins_port=${jenkins_port} accepted for template symmetry.
+set -euxo pipefail
+export DEBIAN_FRONTEND=noninteractive
+
+apt-get update -y
+apt-get install -y docker.io git nginx ca-certificates curl
+systemctl enable --now docker
+usermod -aG docker ubuntu
+
+# Docker Compose plugin (portable binary).
+mkdir -p /usr/libexec/docker/cli-plugins
+curl -fsSL "https://github.com/docker/compose/releases/latest/download/docker-compose-linux-x86_64" \
+  -o /usr/libexec/docker/cli-plugins/docker-compose
+chmod +x /usr/libexec/docker/cli-plugins/docker-compose
+
+systemctl enable --now nginx
+apt-get install -y certbot python3-certbot-nginx || true
+
+mkdir -p /opt/serviot/devices-api /opt/serviot/multi-auth
+chown -R ubuntu:ubuntu /opt/serviot

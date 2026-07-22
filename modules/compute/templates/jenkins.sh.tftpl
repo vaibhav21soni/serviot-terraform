@@ -1,0 +1,45 @@
+#!/bin/bash
+# Jenkins server bootstrap (Ubuntu 22.04). Jenkins on non-default port ${jenkins_port}.
+# Docker installed too so pipelines can build/push images. SSH user = ubuntu.
+# Logs to /var/log/cloud-init-output.log — check there if the UI is unreachable.
+set -euxo pipefail
+export DEBIAN_FRONTEND=noninteractive
+
+apt-get update -y
+apt-get install -y fontconfig openjdk-21-jre git docker.io ca-certificates curl
+systemctl enable --now docker
+usermod -aG docker ubuntu
+
+# Docker Compose plugin (portable binary).
+mkdir -p /usr/libexec/docker/cli-plugins
+curl -fsSL "https://github.com/docker/compose/releases/latest/download/docker-compose-linux-x86_64" \
+  -o /usr/libexec/docker/cli-plugins/docker-compose
+chmod +x /usr/libexec/docker/cli-plugins/docker-compose
+
+# Jenkins apt repo. Use the CURRENT signing key (jenkins.io-2026.key) — Jenkins
+# rotates this key, and a stale one causes NO_PUBKEY / "repository not signed".
+install -m 0755 -d /etc/apt/keyrings
+curl -fsSL https://pkg.jenkins.io/debian-stable/jenkins.io-2026.key \
+  -o /etc/apt/keyrings/jenkins-keyring.asc
+echo "deb [signed-by=/etc/apt/keyrings/jenkins-keyring.asc] https://pkg.jenkins.io/debian-stable binary/" \
+  > /etc/apt/sources.list.d/jenkins.list
+apt-get update -y
+apt-get install -y jenkins
+
+# Force listen port to ${jenkins_port} (never 8080) via a systemd drop-in.
+mkdir -p /etc/systemd/system/jenkins.service.d
+cat >/etc/systemd/system/jenkins.service.d/port.conf <<CONF
+[Service]
+Environment="JENKINS_PORT=${jenkins_port}"
+CONF
+
+usermod -aG docker jenkins || true
+systemctl daemon-reload
+systemctl enable --now jenkins
+
+# Surface state in the log for debugging.
+sleep 20
+systemctl is-active jenkins || journalctl -u jenkins --no-pager | tail -50
+ss -ltnp | grep ":${jenkins_port}" || echo "WARN: jenkins not listening on ${jenkins_port} yet"
+echo "Initial admin password:"
+cat /var/lib/jenkins/secrets/initialAdminPassword || true

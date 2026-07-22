@@ -1,0 +1,11 @@
+# Never commit state (contains secrets) or var files with real values.
+*.tfstate
+*.tfstate.*
+.terraform/
+.terraform.lock.hcl
+terraform.tfvars
+*.auto.tfvars
+crash.log
+*.pem
+override.tf
+override.tf.json

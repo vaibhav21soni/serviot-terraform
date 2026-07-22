@@ -1,0 +1,58 @@
+#!/usr/bin/env bash
+# Runs ON the app EC2 (which can reach private RDS). Creates the per-app roles
+# and databases idempotently, then grants each owner full rights on its own
+# database's public schema (needed since Postgres 15 locks down public, and the
+# initial RDS db pre-exists owned by the master user).
+set -euo pipefail
+
+# psql against the maintenance/init db (for role + database existence checks).
+run() {
+  sudo docker run --rm -i postgres:16 psql \
+    "postgresql://${master_user}:${master_password}@${rds_host}:5432/${init_db}?sslmode=require" \
+    -v ON_ERROR_STOP=1 "$@"
+}
+
+# psql against a specific database (for schema-level grants).
+run_on() {
+  local db="$1"; shift
+  sudo docker run --rm -i postgres:16 psql \
+    "postgresql://${master_user}:${master_password}@${rds_host}:5432/$db?sslmode=require" \
+    -v ON_ERROR_STOP=1 "$@"
+}
+
+create_role() {
+  if [ "$(run -tAc "SELECT 1 FROM pg_roles WHERE rolname='$1'")" != "1" ]; then
+    run -c "CREATE ROLE \"$1\" LOGIN PASSWORD '$2'"
+    echo "created role $1"
+  else
+    echo "role $1 exists"
+  fi
+}
+
+create_db() {
+  if [ "$(run -tAc "SELECT 1 FROM pg_database WHERE datname='$1'")" != "1" ]; then
+    run -c "CREATE DATABASE \"$1\" OWNER \"$2\""
+    echo "created database $1"
+  else
+    echo "database $1 exists"
+  fi
+}
+
+# Give the app role full control of its own DB + public schema. Idempotent, and
+# fixes pre-existing DBs still owned by the master user.
+grant_owner() {
+  local db="$1" owner="$2"
+  run -c "GRANT ALL ON DATABASE \"$db\" TO \"$owner\""
+  run_on "$db" -c "ALTER SCHEMA public OWNER TO \"$owner\""
+  run_on "$db" -c "GRANT ALL ON SCHEMA public TO \"$owner\""
+  echo "granted $owner on $db"
+}
+
+create_role "${app1_user}" "${app1_password}"
+create_role "${app2_user}" "${app2_password}"
+create_db "${app1_db}" "${app1_user}"
+create_db "${app2_db}" "${app2_user}"
+grant_owner "${app1_db}" "${app1_user}"
+grant_owner "${app2_db}" "${app2_user}"
+
+echo "databases ready in one RDS: ${app1_db}, ${app2_db}"
